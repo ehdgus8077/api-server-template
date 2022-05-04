@@ -1,15 +1,10 @@
 import { Request, Response } from "express";
-import * as type from "./type";
+import * as type from "./type/mock";
 import HelloWorld from "../models/helloWorld";
-import {
-  Post,
-  BaseController,
-  Controller,
-  Swagger,
-} from "../utils/expressJoiSwagger";
+import { Post, Controller, Swagger } from "../utils/expressJoiSwagger";
 
-@Controller("/mock")
-class MockController extends BaseController {
+@Controller("/mock", true)
+class MockController {
   @Post("/hello")
   @Swagger({
     description: "mock API",
@@ -19,7 +14,7 @@ class MockController extends BaseController {
     },
   })
   public hello(req: Request, res: Response) {
-    const { id } = req.body.id as type.MockHelloBody;
+    const { id } = req.body as type.MockHelloBody;
     res.send({ message: HelloWorld.message(), id });
   }
 }

@@ -1,4 +1,4 @@
-# AIFFEL API Server
+# API Server Template
 
 ---
 

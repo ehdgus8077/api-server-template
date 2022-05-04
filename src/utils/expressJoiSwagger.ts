@@ -1,14 +1,20 @@
 import "reflect-metadata";
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, Application } from "express";
 import Joi from "joi";
 import { StatusCodes } from "http-status-codes";
+import j2s from "joi-to-swagger";
+import swaggerUi from "swagger-ui-express";
 import Logger from "./logger";
+import { VERSION, SERVER_TITLE, SERVER_DESCRIPTION } from "../common/constants";
 import { ErrorCode } from "../common/error";
 
 enum MetadataKeys {
   path = "path",
   method = "method",
   swaggerParams = "swaggerParams",
+  swaggers = "swaggers",
+  routePrefix = "routePrefix",
+  router = "router",
 }
 
 enum Method {
@@ -25,6 +31,10 @@ interface SwaggerParams {
   responseJoi: {
     [statusCode: string]: Joi.ObjectSchema;
   };
+}
+
+interface Swaggers {
+  [path: string]: SwaggerParams & { method: string };
 }
 
 interface APIHandlerWrapperOption {
@@ -83,25 +93,11 @@ const getAPIHandlerWrapper = async (
   }
 };
 
-class BaseController {
-  getRouter() {
-    return Router();
-  }
-
-  getSwaggers(): { [path: string]: SwaggerParams & { method: string } } {
-    return {};
-  }
-
-  getRoutePrefix(): string {
-    return "";
-  }
-}
-
 // Class Decorator
 function Controller(routePrefix: string, log: boolean = false) {
   return (target: Function) => {
     const router = Router();
-    const swaggers: { [path: string]: SwaggerParams & { method: string } } = {};
+    const swaggers: Swaggers = {};
     const prototype = Object.getOwnPropertyDescriptors(target.prototype);
     Object.keys(prototype).forEach((key) => {
       const routeHandler = prototype[key].value;
@@ -137,18 +133,13 @@ function Controller(routePrefix: string, log: boolean = false) {
       }
     });
 
-    // eslint-disable-next-line no-param-reassign
-    target.prototype.getRouter = () => {
-      return router;
-    };
-    // eslint-disable-next-line no-param-reassign
-    target.prototype.getSwaggers = () => {
-      return swaggers;
-    };
-    // eslint-disable-next-line no-param-reassign
-    target.prototype.getRoutePrefix = () => {
-      return routePrefix;
-    };
+    Reflect.defineMetadata(MetadataKeys.router, router, target.prototype);
+    Reflect.defineMetadata(MetadataKeys.swaggers, swaggers, target.prototype);
+    Reflect.defineMetadata(
+      MetadataKeys.routePrefix,
+      routePrefix,
+      target.prototype
+    );
   };
 }
 function routeBinder(method: Method) {
@@ -173,4 +164,71 @@ const Swagger = (params: SwaggerParams) => {
   };
 };
 
-export { BaseController, Controller, Get, Post, Put, Patch, Delete, Swagger };
+function registerAPI(app: Application, controllers: Object[]) {
+  const swaggerPath = {};
+  controllers.forEach((controller) => {
+    const routePrefix: string = Reflect.getMetadata(
+      MetadataKeys.routePrefix,
+      controller
+    );
+    const swaggers: Swaggers = Reflect.getMetadata(
+      MetadataKeys.swaggers,
+      controller
+    );
+    const router: Router = Reflect.getMetadata(MetadataKeys.router, controller);
+    app.use(router);
+
+    Object.entries(swaggers).forEach(([path, swaggerParams]) => {
+      const responses = {};
+      Object.entries(swaggerParams.responseJoi).forEach(([statusCode, joi]) => {
+        responses[statusCode] = {
+          schema: j2s(joi).swagger,
+        };
+      });
+      swaggerPath[`${routePrefix}${path}`] = {
+        [swaggerParams.method]: {
+          tags: [routePrefix],
+          consumes: ["application/json"],
+          summary: swaggerParams.description,
+          security: [
+            {
+              ApiKeyAuth: [],
+            },
+          ],
+          parameters: [
+            {
+              name: "data",
+              in: "body",
+              schema: j2s(swaggerParams.bodyParamsJoi).swagger,
+            },
+          ],
+          responses,
+        },
+      };
+    });
+  });
+
+  app.use(
+    "/api-docs",
+    swaggerUi.serve,
+    swaggerUi.setup({
+      info: {
+        title: SERVER_TITLE,
+        description: SERVER_DESCRIPTION,
+        version: VERSION,
+        swagger: "2.0",
+      },
+      swagger: "2.0",
+      paths: swaggerPath,
+      securityDefinitions: {
+        ApiKeyAuth: {
+          type: "apiKey",
+          in: "header",
+          name: "token",
+        },
+      },
+    })
+  );
+}
+
+export { registerAPI, Controller, Get, Post, Put, Patch, Delete, Swagger };
